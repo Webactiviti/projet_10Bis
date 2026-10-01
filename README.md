@@ -49,6 +49,7 @@ projet_10/
 ├── docker-compose.yml                              # Orchestration des conteneurs 
 ├── Dockerfile                                      # Configuration du conteneur 
 ├── read_zip_V4.yaml                                # flow code pour Kestra 
+├── clear_log.yaml                                  # flow code pour Kestra effacement des logs pour debug
 ├── pyproject.toml                                  # Gestion des dépendances Python (uv)
 ├── doc                                             # répertoire  de document 
 |    └── dico_data.xlsx                             # dictionnaire des fichiers de données

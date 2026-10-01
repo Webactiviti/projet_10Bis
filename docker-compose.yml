@@ -1,0 +1,59 @@
+services:
+  kestra:
+    image: kestra/kestra:latest
+    container_name: dock_prj10_bis
+    user : root
+    ports:
+      - "8080:8080"
+    networks:
+      - bottleneck_net
+    volumes:
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+      - /var/run/docker.sock:/var/run/docker.sock
+      - kestra_storage:/app/data
+      - ./scripts/insert_xls.py:/app/scripts/insert_xls.py
+      - ./scripts/resultat_req.py:/app/scripts/resultat_req.py
+    environment:
+      KESTRA_CONFIGURATION: |
+        kestra:
+          repository:
+            type: h2
+            h2:
+              path: /app/data/kestra_db
+          queue:
+            type: h2
+            h2:
+              path: /app/data/kestra_db
+          storage:
+            type: local
+            local:
+              base-path: /app/data/files
+    command: server standalone
+
+
+
+  mailpit:
+    image: axllent/mailpit
+    container_name: mailpit
+    restart: unless-stopped
+    volumes:
+        - ./data:/app/data
+    ports:
+        - 8025:8025 # Interface web pour voir les emails
+        - 1025:1025 # Port SMTP local
+    networks:
+      - bottleneck_net
+    environment:
+        MP_MAX_MESSAGES: 5000
+        MP_DATABASE: /app/data/mailpit.db
+        MP_SMTP_AUTH_ACCEPT_ANY: 1
+        MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+networks:
+  bottleneck_net:
+    driver: bridge
+
+volumes:
+  kestra_storage:
+    name: kestra_storage

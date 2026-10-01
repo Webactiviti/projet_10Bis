@@ -1,0 +1,211 @@
+id: read_zip_V4
+namespace: bottleneck
+
+tasks:
+
+  #-----------------------------------------------
+  # Téléchargement et récupération du fichier ZIP 
+  #-----------------------------------------------
+
+  - id: download_zip
+    type: io.kestra.plugin.core.http.Download
+    uri: "https://s3.eu-west-1.amazonaws.com/course.oc-static.com/projects/922_Data+Engineer/922_P10/bottleneck.zip"
+    allowFailure: true # Empêche le plantage immédiat du flow si l'URL est HS
+
+
+  - id: etape_zip
+    type: io.kestra.plugin.scripts.shell.Script
+    script: |
+      echo '::{"outputs":{"etape_1":"Chargement fichier ZIP -> bottleneck.zip"}}::'
+
+  #-----------------------------------------------
+  #  Décompression du fichier ZIP
+  #-----------------------------------------------
+
+  - id: decompress_archive
+    type: io.kestra.plugin.compress.ArchiveDecompress
+    from: "{{ outputs.download_zip.uri }}"
+    algorithm: ZIP
+
+
+  - id: etape_extract
+    type: io.kestra.plugin.scripts.shell.Script
+    script: |
+      echo '::{"outputs":{"etape_2":"Extraction fichier ZIP -> bottleneck.zip"}}::'
+
+
+  #-----------------------------------------------
+  #  log des fichiers xls
+  #-----------------------------------------------
+
+  - id: log_file_zip
+    type: io.kestra.plugin.core.log.Log
+    message: " {{ outputs.decompress_archive }}"
+
+
+
+
+
+  #-----------------------------------------------
+  #  traitement des fichiers XLSX
+  #-----------------------------------------------
+
+  - id: insert_file_xls
+    type: io.kestra.plugin.scripts.python.Commands
+    containerImage: dock_prj10_bis
+
+    pythonVersion : "3.13"
+
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+
+    outputFiles:
+      - "*.duckdb"
+
+    inputFiles:
+      "{{ outputs.decompress_archive.files | keys | jq('.[0]') | first }}": "{{ outputs.decompress_archive.files | values | jq('.[0]') | first }}" 
+      "{{ outputs.decompress_archive.files | keys | jq('.[1]') | first }}": "{{ outputs.decompress_archive.files | values | jq('.[1]') | first }}"
+      "{{ outputs.decompress_archive.files | keys | jq('.[2]') | first }}": "{{ outputs.decompress_archive.files | values | jq('.[2]') | first }}"
+
+    commands:
+      - python /app/scripts/insert_xls.py "{{ outputs.decompress_archive.files | keys | jq('.[0]') | first }}" "{{ outputs.decompress_archive.files | keys | jq('.[1]') | first }}" "{{ outputs.decompress_archive.files | keys | jq('.[2]') | first }}"
+
+
+  #-----------------------------------------------
+  #  log  fichier 
+  #-----------------------------------------------
+
+  - id: log_file_xls
+    type: io.kestra.plugin.core.log.Log
+    message: " {{ outputs.insert_file_xls.vars.pipeline_logs }}"
+
+
+
+  - id: etape_fichier_xls
+    type: io.kestra.plugin.scripts.shell.Script
+    script: |
+      echo '---> duckdb file : {{ outputs.insert_file_xls.outputFiles}} '
+
+ #-----------------------------------------------
+  #  Requete base duckdb
+  #-----------------------------------------------
+
+  - id: resultat_req
+    type: io.kestra.plugin.scripts.python.Commands
+    containerImage: dock_prj10_bis
+    pythonVersion : "3.13"
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+
+    # On déclare les fichiers que Kestra doit conserver après l'exécution
+    outputFiles:
+      - "vins_premium.csv"
+      - "vins_ordinaires.csv"
+      - "rapport_chiffre_affaires_produit.xlsx"
+      - "chiffre_affaires_total.xlsx"
+    inputFiles:
+      # Option B : récupération dynamique de l'URI du 1er fichier sorti
+      "{{ outputs.insert_file_xls.outputFiles | keys | first }}": "{{ outputs.insert_file_xls.outputFiles | values | first }}"
+
+    commands:
+      - mkdir -p  data/exports
+      - python /app/scripts/resultat_req.py "{{ outputs.insert_file_xls.outputFiles.keySet() | first }}"
+
+
+  - id: log_result_req
+    type: io.kestra.plugin.core.log.Log
+    message : 'file duckdb : "{{ outputs.resultat_req.vars.pipeline_logs }}"'
+   
+
+  #-----------------------------------------------
+  #  Gestion send mail résultat
+  #-----------------------------------------------
+
+
+  - id: send_email
+    type: io.kestra.plugin.email.MailSend
+    host: mailpit
+    port: 1025
+    transportStrategy: SMTP
+    from: kestra@example.com
+    to: user@example.com
+    subject: " Notification rapport depuis Kestra"
+    plainTextContent: |
+
+      Déroulement du workflow :
+        
+      Etape lecture ZIP FILE --> {{ outputs.etape_zip.vars}}
+      Etape extract ZIP FILE --> {{ outputs.etape_extract.vars}}
+
+         "{{ outputs.insert_file_xls.vars.pipeline_logs }}"
+
+          "{{ outputs.resultat_req.vars.pipeline_logs }}"
+
+          
+      L'exécution  du workflow bottleneck s'est terminée avec succés.
+
+
+    attachments:
+      - name: vins_premium.csv
+        uri: "{{ outputs.resultat_req.outputFiles['vins_premium.csv'] }}"
+        contentType: text/csv
+
+      - name: vins_ordinaires.csv
+        uri: "{{ outputs.resultat_req.outputFiles['vins_ordinaires.csv'] }}"
+        contentType: text/csv
+
+      - name: rapport_chiffre_affaires_produit.xlsx
+        uri: "{{ outputs.resultat_req.outputFiles['rapport_chiffre_affaires_produit.xlsx'] }}"
+        contentType: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+      - name: chiffre_affaires_total.xlsx
+        uri: "{{ outputs.resultat_req.outputFiles['chiffre_affaires_total.xlsx'] }}"
+        contentType: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+
+errors:
+  - id: notification_erreur
+    type: io.kestra.plugin.core.log.Log
+    message: >
+      "Le workflow s'est arrêté à la tâche ID : {{ tasksWithState('FAILED')[0].taskId }}"
+      Tâche en échec : {{ tasksWithState('FAILED')[0].taskId }}
+      Message d'erreur : {{ tasksWithState('FAILED')[0].outputs.error.message | default('Aucun message explicite') }}
+
+
+  - id: send_email_download_error
+    type: io.kestra.plugin.email.MailSend
+
+    host: mailpit
+    port: 1025
+    transportStrategy: SMTP
+    from: kestra@example.com
+    to: user@example.com
+    subject: "🔴 [ÉCHEC WORKFLOW] {{ flow.id }}"
+    plainTextContent: |
+      Bonjour,
+
+      Une erreur est survenue lors de l'exécution du workflow.
+
+      "Failure alert for flow {{flow.namespace}}.{{flow.id}}   "
+
+      Tâche bloquée : {{ (tasksWithState("FAILED") | first).taskId }}
+      Message d'erreur : {{ (errorLogs() | first).message }}
+
+
+  - id: stop_execution
+    type: io.kestra.plugin.core.execution.Fail
+
+
+# Planification à 9h le 15 du mois
+triggers:
+    - id: mensuel_15_9h
+      type: io.kestra.plugin.core.trigger.Schedule
+      cron: "0 9 15 * *"
+
+
+
+
+
+
+
+

@@ -1,0 +1,12 @@
+id: purge_executions_and_logs
+namespace: system
+
+tasks:
+  - id: clear_all
+    type: io.kestra.plugin.core.execution.PurgeExecutions
+    endDate: "{{ now() | dateAdd(0, 'DAYS') }}"
+    states:
+      - SUCCESS
+      - FAILED
+      - KILLED
+    purgeLog: true # Active la suppression des logs liés
